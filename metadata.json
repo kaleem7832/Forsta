@@ -1,0 +1,6 @@
+{
+  "name": "Survey Questionnaire Tagging App",
+  "description": "An AI-powered tool to automatically parse survey questionnaire Word documents and apply Forsta compatible programming tags.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
