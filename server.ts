@@ -118,53 +118,73 @@ ${extractedText}
 
 Please parse and return a structured JSON list of questions according to the rules. Make sure you tag and structure everything correctly. Do not skip any real questions unless they contain "answer per column".`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: userPrompt,
-      config: {
-        systemInstruction: systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          required: ["questions"],
-          properties: {
-            questions: {
-              type: Type.ARRAY,
-              description: "The list of parsed and tagged questions",
-              items: {
-                type: Type.OBJECT,
-                required: ["id", "type", "questionText", "title", "instruction", "options", "isIgnored"],
-                properties: {
-                  id: { type: Type.STRING },
-                  type: { type: Type.STRING },
-                  questionText: { type: Type.STRING },
-                  title: { type: Type.STRING },
-                  instruction: { type: Type.STRING },
-                  options: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
+    // Execute Gemini API call with automatic retry on 503 or high demand errors
+    let response;
+    const maxAttempts = 3;
+    let currentDelay = 1500; // Base delay: 1.5s
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: userPrompt,
+          config: {
+            systemInstruction: systemInstruction,
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              required: ["questions"],
+              properties: {
+                questions: {
+                  type: Type.ARRAY,
+                  description: "The list of parsed and tagged questions",
+                  items: {
+                    type: Type.OBJECT,
+                    required: ["id", "type", "questionText", "title", "instruction", "options", "isIgnored"],
+                    properties: {
+                      id: { type: Type.STRING },
+                      type: { type: Type.STRING },
+                      questionText: { type: Type.STRING },
+                      title: { type: Type.STRING },
+                      instruction: { type: Type.STRING },
+                      options: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                      gridHeaders: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                      gridRows: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                      tags: {
+                        type: Type.ARRAY,
+                        items: { type: Type.STRING },
+                      },
+                      isIgnored: { type: Type.BOOLEAN },
+                      originalText: { type: Type.STRING },
+                    },
                   },
-                  gridHeaders: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                  gridRows: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                  tags: {
-                    type: Type.ARRAY,
-                    items: { type: Type.STRING },
-                  },
-                  isIgnored: { type: Type.BOOLEAN },
-                  originalText: { type: Type.STRING },
                 },
               },
             },
           },
-        },
-      },
-    });
+        });
+        break; // Success! Break out of the retry loop.
+      } catch (err: any) {
+        console.warn(`Gemini API attempt ${attempt} failed:`, err.message || err);
+        const errStr = String(err.message || "").toLowerCase();
+        const is503 = err.status === 503 || errStr.includes("503") || errStr.includes("unavailable") || errStr.includes("high demand") || errStr.includes("overloaded");
+        if (attempt < maxAttempts && is503) {
+          console.log(`Temporary server load detected. Retrying attempt ${attempt + 1}/${maxAttempts} in ${currentDelay}ms...`);
+          await new Promise((resolve) => setTimeout(resolve, currentDelay));
+          currentDelay *= 2; // Exponential backoff
+        } else {
+          throw err; // Rethrow on last attempt or non-retryable error
+        }
+      }
+    }
 
     const resultText = response.text || "{}";
     const parsedData = JSON.parse(resultText);
@@ -349,30 +369,27 @@ app.post("/api/generate-docx", async (req, res): Promise<any> => {
       if (q.isIgnored) continue;
 
       // Construct Question Header
-      // QN. Question text [[type, randomize]]
-      // Apply any general purpose and property tags
-      let hasRandomize = false;
+      // QN. Question text [[type]]
+      // Apply any general purpose and property tags (e.g., randomize, min/max)
+      let typeTag = q.type;
+      if (q.type === "numeric list") typeTag = "numeric list";
+      if (q.type === "text list") typeTag = "text list";
+      
       const combinedTags: string[] = [];
       if (q.tags && Array.isArray(q.tags)) {
         q.tags.forEach((t: string) => {
-          if (t === "randomize") {
-            hasRandomize = true;
-          } else if (t !== q.type && t !== "required" && t !== "not required") {
+          if (t !== q.type && t !== "required" && t !== "not required") {
             combinedTags.push(t);
           }
         });
       }
 
-      let typeTag = q.type;
-      if (q.type === "numeric list") typeTag = "numeric list";
-      if (q.type === "text list") typeTag = "text list";
-
-      if (hasRandomize) {
-        typeTag = `${typeTag}, randomize`;
-      }
-
       const formattedID = q.id.toLowerCase().endsWith(".") ? q.id : `${q.id}.`;
-      const questionLabel = `${formattedID} ${q.questionText} [[${typeTag}]]`;
+      let typeTagIdentifier = typeTag;
+      if (combinedTags.length > 0) {
+        typeTagIdentifier = `${typeTag}, ${combinedTags.join(", ")}`;
+      }
+      const questionLabel = `${formattedID} ${q.questionText} [[${typeTagIdentifier}]]`;
 
       docChildren.push(
         new Paragraph({
@@ -388,7 +405,7 @@ app.post("/api/generate-docx", async (req, res): Promise<any> => {
       );
 
       // QN [[title]]
-      const titleLabel = `${q.id} [[title]] ${combinedTags.map(t => `[[${t}]]`).join(" ")}`.trim();
+      const titleLabel = `${q.id} [[title]]`;
       docChildren.push(
         new Paragraph({
           children: [
@@ -618,6 +635,11 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 // Vite & express logic
 async function startServer() {
+  if (process.env.VERCEL) {
+    // Under Vercel Serverless environment, we do not start the listener or Vite manually
+    return;
+  }
+
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
@@ -639,3 +661,5 @@ async function startServer() {
 }
 
 startServer();
+
+export default app;
