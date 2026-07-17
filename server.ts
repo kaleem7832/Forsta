@@ -20,15 +20,26 @@ const upload = multer({
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit
 });
 
-// Initialize Gemini Client
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY,
-  httpOptions: {
-    headers: {
-      "User-Agent": "aistudio-build",
-    },
-  },
-});
+// Initialize Gemini Client lazily to prevent module load-time crashes if GEMINI_API_KEY is missing
+let aiInstance: GoogleGenAI | null = null;
+
+function getGeminiClient(): GoogleGenAI {
+  if (!aiInstance) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("GEMINI_API_KEY environment variable is required but was not found. Please set it in your Settings or environment configuration.");
+    }
+    aiInstance = new GoogleGenAI({
+      apiKey: apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+  }
+  return aiInstance;
+}
 
 // API endpoint to analyze questionnaire
 app.post("/api/parse-questionnaire", upload.single("file"), async (req, res): Promise<any> => {
@@ -124,7 +135,8 @@ Please parse and return a structured JSON list of questions according to the rul
     let currentDelay = 1500; // Base delay: 1.5s
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        response = await ai.models.generateContent({
+        const aiClient = getGeminiClient();
+        response = await aiClient.models.generateContent({
           model: "gemini-3.5-flash",
           contents: userPrompt,
           config: {

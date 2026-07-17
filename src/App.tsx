@@ -112,7 +112,15 @@ export default function App() {
         const textResponse = await response.text();
         console.error("Non-JSON Server response:", textResponse);
         
-        if (textResponse.includes("Cookie check") || textResponse.includes("Action required to load your app") || textResponse.includes("redirectToReturnUrl")) {
+        const lowerText = textResponse.toLowerCase();
+        if (
+          lowerText.includes("cookie check") || 
+          lowerText.includes("action required to load your app") || 
+          lowerText.includes("redirecttoreturnurl") ||
+          lowerText.includes("grantstorageaccess") ||
+          lowerText.includes("authinseparatewindowbutton") ||
+          lowerText.includes("__secure-aistudio")
+        ) {
           throw new Error("COOKIE_BLOCKED");
         }
         
@@ -120,7 +128,7 @@ export default function App() {
           throw new Error("The uploaded file is too large. Please select a smaller Word Document.");
         }
         
-        throw new Error("The server returned an invalid response. This usually happens if the backend is restarting or your Gemini API key is missing. Please verify your API keys in the Settings menu and try again.");
+        throw new Error(`The server returned an invalid response (Status ${response.status}). This can occur if your session expired, the backend is starting up, or the Gemini API key is missing. Please try reloading the page, opening the app in a new tab, or verify your API keys in the Settings.`);
       }
 
       const data = await response.json();
